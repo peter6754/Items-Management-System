@@ -10,7 +10,7 @@ use Illuminate\Support\Facades\Log;
 class GoogleSheetsService
 {
     private $spreadsheetId;
-    private $sheetName = 'Items';
+    private $sheetName = 'Лист1';
 
     public function __construct()
     {
@@ -100,7 +100,8 @@ class GoogleSheetsService
             
             $comments = [];
             if (!empty($data) && count($data) > 1) {
-                foreach (array_slice($data, 1) as $row) {
+                $dataArray = is_array($data) ? array_slice($data, 1) : $data->slice(1)->toArray();
+                foreach ($dataArray as $row) {
                     if (isset($row[0]) && isset($row[6])) {
                         $itemId = $row[0];
                         $comment = $row[6] ?? '';
@@ -183,10 +184,12 @@ class GoogleSheetsService
         }
 
         try {
-            $this->syncItems();
-            Log::info('Item removed from Google Sheets (via full sync)', ['item_id' => $item->id]);
+            dispatch(function () use ($item) {
+                $this->syncItems();
+                Log::info('Item removed from Google Sheets (via queued sync)', ['item_id' => $item->id]);
+            })->onQueue('sheets');
         } catch (\Exception $e) {
-            Log::error('Failed to remove item from Google Sheets', ['item_id' => $item->id, 'error' => $e->getMessage()]);
+            Log::error('Failed to queue item removal for Google Sheets', ['item_id' => $item->id, 'error' => $e->getMessage()]);
         }
     }
 
@@ -198,14 +201,18 @@ class GoogleSheetsService
 
         try {
             if ($previousStatus === \App\Models\ItemStatus::Allowed && $item->status !== \App\Models\ItemStatus::Allowed) {
-                $this->syncItems();
-                Log::info('Item status changed from Allowed to Prohibited, removed from sheet', ['item_id' => $item->id]);
+                dispatch(function () use ($item) {
+                    $this->syncItems();
+                    Log::info('Item status changed from Allowed to Prohibited, removed from sheet', ['item_id' => $item->id]);
+                })->onQueue('sheets');
             } elseif ($previousStatus !== \App\Models\ItemStatus::Allowed && $item->status === \App\Models\ItemStatus::Allowed) {
                 $this->addItem($item);
                 Log::info('Item status changed to Allowed, added to sheet', ['item_id' => $item->id]);
             } elseif ($item->status === \App\Models\ItemStatus::Allowed) {
-                $this->syncItems();
-                Log::info('Allowed item updated in sheet', ['item_id' => $item->id]);
+                dispatch(function () use ($item) {
+                    $this->syncItems();
+                    Log::info('Allowed item updated in sheet', ['item_id' => $item->id]);
+                })->onQueue('sheets');
             }
         } catch (\Exception $e) {
             Log::error('Failed to update item in Google Sheets', ['item_id' => $item->id, 'error' => $e->getMessage()]);
@@ -227,7 +234,7 @@ class GoogleSheetsService
                 return [];
             }
 
-            $rows = array_slice($data, 1);
+            $rows = is_array($data) ? array_slice($data, 1) : $data->slice(1)->toArray();
             if ($limit && $limit > 0) {
                 $rows = array_slice($rows, 0, $limit);
             }
